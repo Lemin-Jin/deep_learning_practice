@@ -2,6 +2,7 @@ import torch
 from torchvision import datasets
 from torchvision.transforms import ToTensor
 from torch.utils.data import Dataset
+from torch import nn
 
 class Accumulator:  #@save
     """在n个变量上累加"""
@@ -16,6 +17,76 @@ class Accumulator:  #@save
 
     def __getitem__(self, idx):
         return self.data[idx]
+
+class SoftMax_Trainer:
+    def __init__(self, train_data, test_data, num_epochs, batch_size, learn_rate):
+        self.train_iter = torch.utils.data.DataLoader(train_data, batch_size, shuffle = True)
+        self.test_iter = torch.utils.data.DataLoader(test_data, batch_size, shuffle = True)
+        self.num_epochs = num_epochs
+        self.batch_size = batch_size
+        self.learn_rate = learn_rate
+        num_inputs = train_data[0][0].numel()
+        num_outputs = len(torch.unique(train_data.targets))
+        self.W = torch.normal(0, 0.01, size=(num_inputs,num_outputs), requires_grad= True)
+        self.b = torch.zeros(num_outputs, requires_grad=True, dtype=float)
+
+
+    def evaluate_accuracy(self, data_iter): 
+        metric = Accumulator(2) 
+        for X, y in data_iter:
+            metric.add(self.accuracy(y, self.net(X)), y.numel())
+        return metric[0] / metric[1]
+    
+    def cross_entropy(self, y, y_hat):
+        return - torch.log(y_hat[range(len(y_hat)), y])
+
+    def net(self, X):
+        return self.Softmax(torch.matmul(X.reshape((-1, self.W.shape[0])), self.W) + self.b)
+    
+    def Softmax(self,X):
+        # x.dim = (784, output) W.dim = 784 * len(output)
+        # X*W.dim = batch_size * len(output)
+        X_exp = torch.exp(X)
+        partition = X_exp.sum(1, keepdim=True)
+        return X_exp / partition  # 这里应用了广播机制
+
+    def reset_grad(self,param):
+        if param.grad != None:
+            param.grad.zero_()
+
+    def Stochastic_Gradient_Descent(self, params):
+        with torch.no_grad():
+            for param in params:
+                param -= param.grad * self.learn_rate / self.batch_size
+                self.reset_grad(param)
+
+    def accuracy(self, y, y_hat):
+        if len(y_hat.shape) > 1:
+            y_hat = y_hat.argmax(axis=1)
+        cmp = y_hat.type(y.dtype) == y
+        return float(cmp.type(y.dtype).sum())
+
+    def training(self):
+        metric = Accumulator(3)
+        for X,y in self.train_iter:
+            y_hat = self.net(X) 
+
+            loss = self.cross_entropy(y, y_hat)
+            loss.sum().backward()
+            self.Stochastic_Gradient_Descent([self.W,self.b])
+
+            metric.add(float(loss.sum()), self.accuracy(y, y_hat), y.numel())
+        return metric[0] / metric[2], metric[1] / metric[2]
+        
+    def train(self): 
+        for epoch in range(self.num_epochs):
+            train_metrics = self.training()
+            test_acc = self.evaluate_accuracy(self.test_iter)
+            train_loss, train_acc = train_metrics
+            print("@epoch " + str(epoch))
+            print(train_loss, train_acc, test_acc)
+    
+        
 
 
 train_data = datasets.FashionMNIST(
@@ -32,72 +103,21 @@ test_data = datasets.FashionMNIST(
     transform=ToTensor()
 )
 
+batch_size = 256
+learn_rate = 0.1
 num_inputs = train_data[0][0].numel()
 num_outputs = len(torch.unique(train_data.targets))
-batch_size = 512
-num_epoch = 10
-learn_rate = 0.05
 
-W = torch.normal(0, 0.01, size=(num_inputs,num_outputs), requires_grad= True)
-b = torch.zeros(num_outputs, requires_grad=True)
-test_iter = torch.utils.data.DataLoader(test_data, batch_size, shuffle = False)
+net = nn.Sequential(nn.Flatten(), nn.Linear(num_inputs, num_outputs))
+def init_weights(m):
+    if type(m) == nn.Linear:
+        nn.init.normal_(m.weight, std=0.01)
 
-def evaluate_accuracy(data_iter): 
-    metric = Accumulator(2) 
-    for X, y in data_iter:
-        metric.add(accuracy(y, Softmax(X, W, b)), y.numel())
-    return metric[0] / metric[1]
-
-def Softmax(X, W, b):
-    # x.dim = (784, output) W.dim = 784 * len(output)
-    # X*W.dim = batch_size * len(output)
-    O = torch.matmul(X.reshape((-1, W.shape[0])),W) + b
-    y = torch.exp(O)
-    return y/(y.sum(1, keepdims=True))
-
-def cross_entropy(y, y_hat):
-    return -torch.log(y_hat[range(len(y_hat)), y])
+net.apply(init_weights)
+loss = nn.CrossEntropyLoss(reduction='none')
+updater = torch.optim.SGD(net.parameters(), lr=0.1)
 
 
-
-def reset_grad(param):
-    if param.grad != None:
-        param.grad.zero_()
-
-def Stochastic_Gradient_Descent(params,learn_rate, batch_size):
-    with torch.no_grad():
-        for param in params:
-            param -= param.grad * learn_rate / batch_size
-            reset_grad(param)
-
-# for test value
-
-
-def accuracy(y, y_hat):
-    if len(y_hat.shape) > 1:
-        y_hat = y_hat.argmax(axis=1)
-    cmp = y_hat.type(y.dtype) == y
-    return float(cmp.type(y.dtype).sum())
-
-def training(train_data):
-    num_outputs = len(torch.unique(train_data.targets))
-    batches = torch.utils.data.DataLoader(train_data, batch_size, shuffle = True)
-    acc = [0,0,0]
-    for X,y in batches:
-        y_hat = Softmax(X, W, b)
-        loss = cross_entropy(y, y_hat)
-        loss.sum().backward()
-        Stochastic_Gradient_Descent([W,b], learn_rate, batch_size)
-        acc = [i + j for i, j in zip(acc, [loss.sum(), accuracy(y, y_hat), y.numel()])]
-        return acc[0]/acc[2], acc[1]/acc[2]
-
-def train_ch3(train_data, test_iter, num_epochs): 
-    for epoch in range(num_epochs):
-        train_metrics = training(train_data)
-        test_acc = evaluate_accuracy(test_iter)
-        print("@epoch " + str(epoch))
-        print(train_metrics, test_acc)
-
-train_ch3(train_data, test_iter, num_epoch)
-
+smt = SoftMax_Trainer(train_data, test_data, 10, batch_size, learn_rate)
+smt.train()
 
