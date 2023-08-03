@@ -3,6 +3,7 @@ from torchvision import datasets
 from torchvision.transforms import ToTensor
 from torch.utils.data import Dataset
 from torch import nn
+from helper import *
 
 class Accumulator:  #@save
     """在n个变量上累加"""
@@ -70,7 +71,6 @@ class SoftMax_Trainer:
         metric = Accumulator(3)
         for X,y in self.train_iter:
             y_hat = self.net(X) 
-
             loss = self.cross_entropy(y, y_hat)
             loss.sum().backward()
             self.Stochastic_Gradient_Descent([self.W,self.b])
@@ -115,9 +115,10 @@ def init_weights(m):
 
 net.apply(init_weights)
 loss = nn.CrossEntropyLoss(reduction='none')
-updater = torch.optim.SGD(net.parameters(), lr=0.1)
+updater = torch.optim.SGD(net.parameters(), lr=0.05)
 
+k_fold_validate(train_data, 5, net, loss, updater, 20, batch_size, evaluate_accuracy)
 
-smt = SoftMax_Trainer(train_data, test_data, 10, batch_size, learn_rate)
-smt.train()
+# smt = SoftMax_Trainer(train_data, test_data, 10, batch_size, learn_rate)
+# smt.train()
 
